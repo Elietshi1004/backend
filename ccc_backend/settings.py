@@ -40,7 +40,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Apps externes
     'rest_framework',
-    'corsheaders',
+    'corsheaders',   
+    'django_extensions',
 
     # Ton app
     'core',
