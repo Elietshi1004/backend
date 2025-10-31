@@ -90,21 +90,21 @@ class NewsViewSet(viewsets.ModelViewSet):
     search_fields = ['title_draft', 'title_final', 'content_draft', 'content_final', 'program__name']
     ordering_fields = ['created_at', 'publish_date_effective', 'importance']
     ordering = ['-created_at']
-    # 🟡 Route personnalisée pour les news non modérées
+    #  Route personnalisée pour les news non modérées
     @action(detail=False, methods=['get'], url_path='pending')
     def pending_news(self, request):
         pending = News.objects.filter(moderator_approved=False)
         serializer = self.get_serializer(pending, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
-     # 🟢 Route : news approuvées
+     #  Route : news approuvées
     @action(detail=False, methods=['get'], url_path='approved')
     def approved_news(self, request):
         approved = News.objects.filter(moderator_approved=True)
         serializer = self.get_serializer(approved, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # 🔴 Route : news refusées ou invalidées
+    #  Route : news refusées ou invalidées
     @action(detail=False, methods=['get'], url_path='rejected')
     def rejected_news(self, request):
         rejected = News.objects.filter(moderator_approved=False)
