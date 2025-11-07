@@ -16,6 +16,12 @@ from .serializers import RoleSerializer
 from .serializers import UserRoleSerializer
 from rest_framework import filters
 from rest_framework.decorators import action
+from .models import PushSubscription, NewsView
+from .serializers import PushSubscriptionSerializer, NewsViewSerializer
+import requests, json
+from .utils import send_news_notification
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])  # accessible sans login
 def signup(request):
@@ -153,6 +159,15 @@ class UserRoleViewSet(viewsets.ModelViewSet):
     queryset = UserRole.objects.all()
     serializer_class = UserRoleSerializer
 
+
+class PushSubscriptionViewSet(viewsets.ModelViewSet):
+    queryset = PushSubscription.objects.all()
+    serializer_class = PushSubscriptionSerializer
+
+class NewsViewViewSet(viewsets.ModelViewSet):
+    queryset = NewsView.objects.all()
+    serializer_class = NewsViewSerializer
+
 # Create your views here.
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -170,3 +185,130 @@ def current_user(request):
         "last_name": user.last_name,
         "roles": roles_data
     })
+
+
+
+# ✅ Enregistrement du external_user_id OneSignal
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def register_push_subscription(request):
+    user = request.user
+    external_user_id = request.data.get('external_user_id')
+    device_token = request.data.get('device_token')
+
+    if not external_user_id:
+        return Response({'error': 'external_user_id requis'}, status=400)
+
+    sub, created = PushSubscription.objects.update_or_create(
+        user=user,
+        defaults={'external_user_id': external_user_id, 'device_token': device_token}
+    )
+
+    return Response({'success': True, 'created': created, 'external_user_id': sub.external_user_id})
+
+
+# ✅ Marquer une news comme vue
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_news_viewed(request, news_id):
+    user = request.user
+    from .models import News
+
+    try:
+        news = News.objects.get(id=news_id)
+    except News.DoesNotExist:
+        return Response({'error': 'News not found'}, status=404)
+
+    view, created = NewsView.objects.get_or_create(user=user, news=news)
+    return Response({'viewed': True, 'created': created})
+
+
+# ✅ Lister les news non encore vues selon abonnements
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def unread_news(request):
+    user = request.user
+    from .models import News, Subscription
+
+    subscribed_programs = Subscription.objects.filter(user=user).values_list('program_id', flat=True)
+    seen_news = NewsView.objects.filter(user=user).values_list('news_id', flat=True)
+
+    unread = News.objects.filter(
+        program_id__in=subscribed_programs,
+        moderator_approved=True
+    ).exclude(id__in=seen_news)
+
+    serializer = NewsSerializer(unread, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['PATCH', 'PUT'])
+@permission_classes([IsAuthenticated])
+def update_news(request, pk):
+    """
+    Permet de mettre à jour une news (modérateurs/admins),
+    et déclenche une notification push OneSignal si la news
+    vient d'être validée (moderator_approved=True).
+    """
+    try:
+        news = News.objects.get(pk=pk)
+    except News.DoesNotExist:
+        return Response({'error': 'News introuvable'}, status=404)
+
+    old_state = news.moderator_approved  # on garde l'ancien état
+    serializer = NewsSerializer(news, data=request.data, partial=True)
+
+    if serializer.is_valid():
+        serializer.save()
+
+        # Si la news vient d'être validée, envoyer la notification
+        if not old_state and serializer.data.get('moderator_approved'):
+            send_news_notification(news)
+
+        return Response(serializer.data)
+    else:
+        return Response(serializer.errors, status=400)
+
+# ✅ Récupérer le nombre de vues par news
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def news_views_count(request, news_id=None):
+    """
+    - Si news_id est fourni : retourne le nombre de vues pour cette news.
+    - Sinon : retourne la liste des news avec leur nombre total de vues.
+    """
+    from .models import News, NewsView
+
+    if news_id:
+        try:
+            news = News.objects.get(id=news_id)
+        except News.DoesNotExist:
+            return Response({'error': 'News introuvable'}, status=404)
+
+        count = NewsView.objects.filter(news=news).count()
+        viewers = NewsView.objects.filter(news=news).select_related('user')
+        viewers_list = [
+            {
+                'id': v.user.id,
+                'username': v.user.username,
+                'email': v.user.email
+            }
+            for v in viewers
+        ]
+
+        return Response({
+            'news_id': news.id,
+            'title_final': news.title_final or news.title_draft,
+            'views_count': count,
+            'viewers': viewers_list
+        })
+
+    else:
+        # Récupère toutes les news avec leur nombre total de vues
+        from django.db.models import Count
+        stats = (
+            News.objects.annotate(views_count=Count('views'))
+            .values('id', 'title_final', 'views_count')
+            .order_by('-views_count')
+        )
+        return Response(list(stats))

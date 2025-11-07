@@ -54,3 +54,14 @@ class UserRoleSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserRole
         fields = '__all__'
+
+class PushSubscriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PushSubscription
+        fields = '__all__'
+
+
+class NewsViewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NewsView
+        fields = '__all__'
